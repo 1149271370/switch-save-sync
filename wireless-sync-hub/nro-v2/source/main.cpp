@@ -34,44 +34,10 @@ struct AppState {
 
 static AppState g_app;
 
-static u64 hidKeysAllDown()
-{
-    u8 controller;
-    u64 keysDown = 0;
-    for (controller = 0; controller < (u8)CONTROLLER_P1_AUTO; controller++) {
-        keysDown |= hidKeysDown((HidControllerID)controller);
-    }
-    return keysDown;
-}
-
-void consoleErrorScreen(const char *fmt, ...)
-{
-    consoleInit(NULL);
-    va_list va;
-    va_start(va, fmt);
-    vprintf(fmt, va);
-    va_end(va);
-    printf("\nPress any button to exit.\n");
-    while (appletMainLoop()) {
-        hidScanInput();
-        u64 keysDown = hidKeysAllDown();
-        if (keysDown && !((keysDown & KEY_TOUCH) || (keysDown & KEY_LSTICK_LEFT) ||
-                          (keysDown & KEY_LSTICK_RIGHT) || (keysDown & KEY_LSTICK_UP) ||
-                          (keysDown & KEY_LSTICK_DOWN) || (keysDown & KEY_RSTICK_LEFT) ||
-                          (keysDown & KEY_RSTICK_RIGHT) || (keysDown & KEY_RSTICK_UP) ||
-                          (keysDown & KEY_RSTICK_DOWN))) {
-            break;
-        }
-        consoleUpdate(NULL);
-    }
-    consoleExit(NULL);
-}
-
 static bool initSdl()
 {
-    bool success = true;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
-        consoleErrorScreen("SDL could not initialize! SDL Error: %s", SDL_GetError());
+        fprintf(stderr, "SDL could not initialize! SDL Error: %s\n", SDL_GetError());
         return false;
     }
 
@@ -88,13 +54,13 @@ static bool initSdl()
         SCREEN_HEIGHT,
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
     if (!g_window) {
-        consoleErrorScreen("Window could not be created! SDL Error: %s", SDL_GetError());
+        fprintf(stderr, "Window could not be created! SDL Error: %s\n", SDL_GetError());
         return false;
     }
 
     g_context = SDL_GL_CreateContext(g_window);
     if (!g_context) {
-        consoleErrorScreen("OpenGL context could not be created! SDL Error: %s", SDL_GetError());
+        fprintf(stderr, "OpenGL context could not be created! SDL Error: %s\n", SDL_GetError());
         return false;
     }
 
@@ -135,7 +101,7 @@ static void drawHeader()
     }
 
     ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::Text("|");
     ImGui::SameLine();
     const char *server_status = g_app.server_running ? "Info server: ON" : "Info server: OFF";
     ImGui::TextUnformatted(server_status);
@@ -228,12 +194,17 @@ int main()
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
     bool exit_app = false;
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeDefault(&pad);
     while (!exit_app && appletMainLoop()) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
             if (event.type == SDL_QUIT) exit_app = true;
         }
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & HidNpadButton_Plus) exit_app = true;
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame(g_window);
