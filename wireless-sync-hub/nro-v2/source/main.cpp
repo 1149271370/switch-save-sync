@@ -168,23 +168,6 @@ static bool initSdl()
 static void loadSystemFont(ImGuiIO &io)
 {
     g_font_standard = io.Fonts->AddFontDefault();
-    const char *font_paths[] = {
-        "sdmc:/switch/SwitchSaveSyncHub/font.ttf",
-        "sdmc:/switch/font.ttf",
-    };
-    for (size_t i = 0; i < sizeof(font_paths) / sizeof(font_paths[0]); i++) {
-        ImFont *font = io.Fonts->AddFontFromFileTTF(
-            font_paths[i], 24.0f, NULL,
-            io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
-        if (font) {
-            g_font_chinese = font;
-            logApp("external Chinese font loaded");
-            break;
-        }
-    }
-    if (!g_font_chinese) {
-        logApp("no external Chinese font found; using default font");
-    }
     io.Fonts->Build();
 }
 
