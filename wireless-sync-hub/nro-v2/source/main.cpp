@@ -342,7 +342,7 @@ static void drawSettings()
 {
     ImGui::BeginChild("settings", ImVec2(0, 0), true);
     ImGui::TextWrapped(T("Language", "语言"));
-    if (ImGui::Button(g_language == Lang_English ? T("Chinese", "English") : T("English", "中文"),
+    if (ImGui::Button(g_language == Lang_English ? "Chinese" : "English",
                       ImVec2(200, 42))) {
         g_language = g_language == Lang_English ? Lang_Chinese : Lang_English;
     }
