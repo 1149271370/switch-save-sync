@@ -167,27 +167,8 @@ static bool initSdl()
 
 static void loadSystemFont(ImGuiIO &io)
 {
-    if (R_SUCCEEDED(plInitialize(PlServiceType_System))) {
-        PlFontData std_font;
-        PlFontData chinese_font;
-        ImFontConfig config;
-        config.FontDataOwnedByAtlas = false;
-
-        if (R_SUCCEEDED(plGetSharedFontByType(&std_font, PlSharedFontType_Standard))) {
-            strncpy(config.Name, "Nintendo Standard", sizeof(config.Name) - 1);
-            g_font_standard = io.Fonts->AddFontFromMemoryTTF(
-                std_font.address, std_font.size, 24.0f, &config,
-                io.Fonts->GetGlyphRangesCyrillic());
-        }
-        if (R_SUCCEEDED(plGetSharedFontByType(&chinese_font, PlSharedFontType_ChineseSimplified))) {
-            strncpy(config.Name, "Chinese Simplified", sizeof(config.Name) - 1);
-            g_font_chinese = io.Fonts->AddFontFromMemoryTTF(
-                chinese_font.address, chinese_font.size, 24.0f, &config,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
-        }
-        io.Fonts->Build();
-        plExit();
-    }
+    g_font_standard = io.Fonts->AddFontDefault();
+    io.Fonts->Build();
 }
 
 static bool g_touch_down = false;
