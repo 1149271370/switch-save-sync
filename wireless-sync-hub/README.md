@@ -20,15 +20,24 @@ Windows 独立 exe 可在 `dist\SwitchSaveSyncHub.exe` 找到；
 
 ## 编译 Switch NRO
 
-NRO 源码在 `switch/`。本仓库的 GitHub Actions 会在推送后自动用 devkitPro
-镜像构建 `NX-Save-Sync.nro`，并把产物发布到仓库的 NRO Release。
+NRO 源码在 `nro-v2/`。本仓库的 GitHub Actions 会在推送后自动用 devkitPro
+镜像构建 `SwitchSaveSyncHub.nro`，并把产物发布到仓库的 NRO Release。
 
 本地构建需要 devkitPro：
 
 ```bash
-cd switch
+cd nro-v2
 make
 ```
+
+如果本机已经导入 devkitPro 的 Docker 镜像，也可以直接运行：
+
+```bash
+cd nro-v2
+./build-local.sh
+```
+
+产物输出为 `nro-v2/SwitchSaveSyncHub.nro`。
 
 ## 首次使用
 

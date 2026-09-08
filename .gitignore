@@ -1,3 +1,6 @@
 __pycache__/
 build/
 *.spec
+*.elf
+*.nacp
+wireless-sync-hub/nro-v2/SwitchSaveSyncHub.nro
