@@ -342,7 +342,14 @@ bool downloadZipFromPc(const char *host, std::string &error)
     bool body = false;
     while ((n = recv(sock, buf, sizeof(buf), 0)) > 0) {
         if (!body) {
-            char *marker = (char *)memmem(buf, (size_t)n, "\r\n\r\n", 4);
+            char *marker = NULL;
+            for (int i = 0; i + 4 <= (int)n; i++) {
+                if (buf[i] == '\r' && buf[i + 1] == '\n' &&
+                    buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+                    marker = &buf[i];
+                    break;
+                }
+            }
             if (marker) {
                 size_t offset = (size_t)(marker - buf) + 4;
                 fwrite(buf + offset, 1, (size_t)n - offset, file);
