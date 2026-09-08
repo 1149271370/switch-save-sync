@@ -14,13 +14,32 @@ jobs:
     container: devkitpro/devkita64:latest
     permissions:
       contents: write
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build NRO
+        id: nro_build
         working-directory: wireless-sync-hub/nro-v2
-        run: make
+        run: make 2>&1 | tee build.log
+
+      - name: Open CI failure issue with build log
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const logPath = 'wireless-sync-hub/nro-v2/build.log';
+            const log = fs.existsSync(logPath)
+              ? fs.readFileSync(logPath, 'utf8')
+              : 'Build log was not captured.';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `CI build log ${context.runNumber}`,
+              body: log.slice(-60000),
+            });
 
       - name: Upload NRO artifact
         uses: actions/upload-artifact@v4
