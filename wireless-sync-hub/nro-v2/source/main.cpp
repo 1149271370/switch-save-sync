@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include <SDL.h>
@@ -31,6 +32,14 @@ static ImFont *g_font_chinese = NULL;
 static const char *T(const char *english, const char *chinese)
 {
     return g_language == Lang_Chinese ? chinese : english;
+}
+
+static void logApp(const char *message)
+{
+    FILE *file = fopen("sdmc:/SwitchSaveSyncHub.log", "a");
+    if (!file) return;
+    fprintf(file, "%s\n", message);
+    fclose(file);
 }
 
 enum ScreenId {
@@ -146,9 +155,9 @@ static void loadSystemFont(ImGuiIO &io)
                 chinese_font.address, chinese_font.size, 24.0f, &config,
                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
         }
+        io.Fonts->Build();
         plExit();
     }
-    io.Fonts->Build();
 }
 
 static bool g_touch_down = false;
@@ -376,7 +385,9 @@ static void drawFrame()
 
 int main()
 {
+    logApp("start");
     if (!initSdl()) return 1;
+    logApp("sdl init ok");
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -384,17 +395,20 @@ int main()
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     ImGui::StyleColorsDark();
     loadSystemFont(io);
+    logApp("font load ok");
 
     loadPcIpFromSd();
-    refreshData();
+    logApp("config load ok");
 
     ImGui_ImplSDL2_InitForOpenGL(g_window, g_context);
     ImGui_ImplOpenGL3_Init("#version 330 core");
+    logApp("imgui init ok");
 
     bool exit_app = false;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
+    logApp("main loop start");
     while (!exit_app && appletMainLoop()) {
         if (g_transfer_server.active() && g_transfer_server.done()) {
             g_transfer_server.stop();
@@ -435,5 +449,6 @@ int main()
     g_info_server.stop();
     g_transfer_server.stop();
     SDL_Quit();
+    logApp("exit");
     return 0;
 }
