@@ -10,6 +10,7 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl.h"
 #include "imgui/imgui_impl_opengl3.h"
+#include "discovery.h"
 
 const GLuint SCREEN_WIDTH = 1280, SCREEN_HEIGHT = 720;
 
@@ -33,6 +34,17 @@ struct AppState {
 };
 
 static AppState g_app;
+static std::vector<AppUser> g_users;
+static std::vector<AppTitle> g_titles;
+static SystemSnapshot g_system;
+
+static void refreshData()
+{
+    scanSystem(g_system);
+    if (R_SUCCEEDED(scanUsers(g_users)) && !g_users.empty()) {
+        scanTitles(g_users[0].uid, g_titles);
+    }
+}
 
 static bool initSdl()
 {
@@ -116,8 +128,15 @@ static void drawOverview()
     ImGui::TextWrapped("Connect this homebrew to the PC Hub by WiFi. "
                        "The PC app can discover installed games, save sizes and system information.");
     ImGui::Spacing();
+    ImGui::Text("Users: %d", (int)g_users.size());
+    ImGui::Text("Installed saves: %d", (int)g_titles.size());
+    ImGui::Text("Firmware: %s", g_system.firmware[0] ? g_system.firmware : "unknown");
+    ImGui::Text("Hardware: %s", g_system.hardware[0] ? g_system.hardware : "unknown");
+    ImGui::Text("CFW: %s", g_system.atmosphere[0] ? g_system.atmosphere : "unknown");
+    ImGui::Spacing();
     if (ImGui::Button("Scan installed games", ImVec2(260, 48))) {
         g_app.scan_requested = true;
+        refreshData();
         g_app.screen = Screen_Games;
     }
     ImGui::SameLine();
@@ -133,11 +152,17 @@ static void drawOverview()
 static void drawGames()
 {
     ImGui::BeginChild("games", ImVec2(0, 0), true);
-    ImGui::TextWrapped("Game discovery backend is being wired up. "
-                       "This page will show every installed game, Title ID, save size and user.");
-    ImGui::Spacing();
-    if (g_app.scan_requested) {
-        ImGui::TextUnformatted("Scan requested. Pull the latest NRO build for the full catalog.");
+    if (g_titles.empty()) {
+        ImGui::TextWrapped("No save data found. Run games once so they create saves, then rescan.");
+    }
+    for (size_t i = 0; i < g_titles.size(); i++) {
+        char label[1400];
+        double mb = (double)g_titles[i].size_bytes / (1024.0 * 1024.0);
+        snprintf(label, sizeof(label), "[%zu] %s | %s | %.2f MB",
+                 i + 1, g_titles[i].name, g_titles[i].title_id, mb);
+        if (ImGui::Selectable(label, (int)i == g_app.selected_game)) {
+            g_app.selected_game = (int)i;
+        }
     }
     ImGui::EndChild();
 }
@@ -145,10 +170,13 @@ static void drawGames()
 static void drawSystem()
 {
     ImGui::BeginChild("system", ImVec2(0, 0), true);
-    ImGui::TextUnformatted("System information backend is being wired up.");
+    ImGui::TextWrapped("Firmware: %s", g_system.firmware[0] ? g_system.firmware : "unknown");
+    ImGui::TextWrapped("Hardware: %s", g_system.hardware[0] ? g_system.hardware : "unknown");
+    ImGui::TextWrapped("CFW: %s", g_system.atmosphere[0] ? g_system.atmosphere : "unknown");
     ImGui::Separator();
-    ImGui::TextWrapped("Planned fields: firmware version, hardware model, Atmosphere version, "
-                       "user profiles, installed title count, free system memory.");
+    for (size_t i = 0; i < g_users.size(); i++) {
+        ImGui::Text("User %d: %s", (int)i + 1, g_users[i].nickname);
+    }
     ImGui::EndChild();
 }
 
@@ -189,6 +217,8 @@ int main()
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     ImGui::StyleColorsDark();
     loadSystemFont(io);
+
+    refreshData();
 
     ImGui_ImplSDL2_InitForOpenGL(g_window, g_context);
     ImGui_ImplOpenGL3_Init("#version 330 core");
