@@ -1,9 +1,12 @@
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
 #include <switch.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <sys/unistd.h>
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -40,6 +43,17 @@ static void logApp(const char *message)
     if (!file) return;
     fprintf(file, "%s\n", message);
     fclose(file);
+}
+
+static void localIpString(char *out, size_t out_size)
+{
+    u32 ip = gethostid();
+    u32 correct = __builtin_bswap32(ip);
+    snprintf(out, out_size, "%u.%u.%u.%u",
+             (correct >> 24) & 0xFF,
+             (correct >> 16) & 0xFF,
+             (correct >> 8) & 0xFF,
+             correct & 0xFF);
 }
 
 static bool showAppletModeWarning()
@@ -300,10 +314,17 @@ static void drawOverview()
         } else {
             g_app.server_running = g_info_server.start(buildCatalogJson());
             if (g_app.server_running) {
+                char ip[32];
+                localIpString(ip, sizeof(ip));
                 logApp("info server started");
                 snprintf(g_app.status, sizeof(g_app.status),
                          T("Info server listening on port 8080. Open PC Hub and press WiFi scan.",
                            "信息服务器已在 8080 端口监听，请在 PC Hub 中点击 WiFi 自动扫描。"));
+                snprintf(g_app.status + strlen(g_app.status),
+                         sizeof(g_app.status) - strlen(g_app.status),
+                         " Switch IP: %s", ip);
+                logApp("Switch IP");
+                logApp(ip);
             } else {
                 logApp("info server failed to start");
                 snprintf(g_app.status, sizeof(g_app.status),
