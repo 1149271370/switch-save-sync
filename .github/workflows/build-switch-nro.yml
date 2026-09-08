@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "wireless-sync-hub/switch/**"
+      - "wireless-sync-hub/nro-v2/**"
       - ".github/workflows/build-switch-nro.yml"
   workflow_dispatch:
 
@@ -19,14 +19,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build NRO
-        working-directory: wireless-sync-hub/switch
+        working-directory: wireless-sync-hub/nro-v2
         run: make
 
       - name: Upload NRO artifact
         uses: actions/upload-artifact@v4
         with:
           name: NX-Save-Sync-Hub-NRO
-          path: wireless-sync-hub/switch/NX-Save-Sync.nro
+          path: wireless-sync-hub/nro-v2/SwitchSaveSyncHub.nro
 
       - name: Attach NRO to nightly release
         uses: softprops/action-gh-release@v2
@@ -36,4 +36,4 @@ jobs:
           name: Switch NRO build ${{ github.run_number }}
           draft: false
           prerelease: true
-          files: wireless-sync-hub/switch/NX-Save-Sync.nro
+          files: wireless-sync-hub/nro-v2/SwitchSaveSyncHub.nro
