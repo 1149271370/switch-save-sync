@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -146,6 +147,181 @@ def backup_target(target_dir: Path, backup_under: Path | None = None) -> Path:
     return backup_dir
 
 
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _run_powershell(script: str) -> str:
+    system_root = os.environ.get("SystemRoot", "C:\\Windows")
+    powershell = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        proc = subprocess.run(
+            [
+                str(powershell),
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+            creationflags=creationflags,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("操作 Switch 超时，请检查 DBI/MTP 连接后重试。") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(f"DBI/MTP 操作失败：{detail or f'退出码 {proc.returncode}'}")
+    return proc.stdout
+
+
+DBI_NAVIGATE = r"""
+$ErrorActionPreference = "Stop"
+$shell = New-Object -ComObject Shell.Application
+$switch = $shell.NameSpace(17).Items() | Where-Object { $_.Name -eq "Switch" } | Select-Object -First 1
+if (-not $switch) {
+    throw "未检测到 Switch，请确认 DBI 已开启 MTP Responder 且已连接电脑"
+}
+$folder = $switch.GetFolder()
+foreach ($part in @("7: Saves", "Installed games", "DAVE THE DIVER")) {
+    $next = $folder.Items() | Where-Object { $_.Name -eq $part } | Select-Object -First 1
+    if (-not $next) {
+        throw "DBI 存档目录中找不到 $part"
+    }
+    $folder = $next.GetFolder()
+}
+"""
+
+
+def _dbi_profile_header(profile: str) -> str:
+    quoted = _ps_quote(profile)
+    return (
+        DBI_NAVIGATE
+        + "\n"
+        + f"""
+$profileItem = $folder.Items() | Where-Object {{ $_.Name -eq {quoted} }} | Select-Object -First 1
+if (-not $profileItem) {{
+    throw "DBI 存档目录中找不到用户目录 {quoted}"
+}}
+$target = $profileItem.GetFolder()
+"""
+    )
+
+
+def dbi_profiles() -> list[str]:
+    script = DBI_NAVIGATE + r"""
+$found = $false
+foreach ($child in @($folder.Items())) {
+    if (-not $child.IsFolder) {
+        continue
+    }
+    $hasSave = $false
+    foreach ($file in @($child.GetFolder().Items())) {
+        if ($file.Name -like "GameSave*") {
+            $hasSave = $true
+            break
+        }
+    }
+    if ($hasSave) {
+        Write-Output $child.Name
+        $found = $true
+    }
+}
+if (-not $found) {
+    throw "在 DBI 存档目录中没有找到包含 GameSave 文件的用户目录"
+}
+"""
+    output = _run_powershell(script)
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def dbi_list_files(profile: str) -> list[str]:
+    script = _dbi_profile_header(profile) + r"""
+foreach ($file in @($target.Items())) {
+    if (-not $file.IsFolder) {
+        Write-Output $file.Name
+    }
+}
+"""
+    output = _run_powershell(script)
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def dbi_export_to(profile: str, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    dest_quoted = _ps_quote(str(destination))
+    script = _dbi_profile_header(profile) + f"""
+$dst = $shell.NameSpace({dest_quoted})
+foreach ($file in @($target.Items())) {{
+    if ($file.IsFolder) {{
+        continue
+    }}
+    $dst.CopyHere($file, 16)
+    $outPath = Join-Path {dest_quoted} $file.Name
+    $deadline = (Get-Date).AddSeconds(45)
+    $ok = $false
+    while ((Get-Date) -lt $deadline) {{
+        if (Test-Path $outPath) {{
+            if ((Get-Item $outPath).Length -gt 0) {{
+                $ok = $true
+                break
+            }}
+        }}
+        Start-Sleep -Milliseconds 200
+    }}
+    if (-not $ok) {{
+        throw "从 Switch 导出存档失败: $($file.Name)"
+    }}
+}}
+Write-Output "EXPORT_OK"
+"""
+    _run_powershell(script)
+
+
+def dbi_upload_from(profile: str, source_dir: Path) -> None:
+    source_quoted = _ps_quote(str(source_dir))
+    script = _dbi_profile_header(profile) + f"""
+$src = $shell.NameSpace({source_quoted})
+foreach ($file in @($src.Items())) {{
+    if ($file.IsFolder) {{
+        continue
+    }}
+    $target.CopyHere($file, 1556)
+    Start-Sleep -Milliseconds 1200
+}}
+Write-Output "UPLOAD_OK"
+"""
+    _run_powershell(script)
+
+
+def dbi_upload_and_verify(profile: str, source_dir: Path) -> None:
+    expected = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    if not expected:
+        raise ValueError("没有可写入 Switch 的转换文件。")
+    dbi_upload_from(profile, source_dir)
+    verify_root = app_local_dir() / "dbi_verify"
+    verify_root.mkdir(parents=True, exist_ok=True)
+    for attempt in range(4):
+        verify_dir = verify_root / f"verify_{time.strftime('%Y%m%d_%H%M%S')}_{int(time.time() * 1000) % 1000}"
+        dbi_export_to(profile, verify_dir)
+        actual = {
+            path.name: path.read_bytes()
+            for path in verify_dir.iterdir()
+            if path.is_file() and path.name in expected
+        }
+        if actual == expected:
+            return
+        time.sleep(1)
+    missing = sorted(set(expected) - set(actual))
+    raise RuntimeError(f"写入 Switch 后校验失败，缺少或不一致的文件：{', '.join(missing) or '未知'}")
+
+
 def execute_plan(items: list[TransferItem], target_dir: Path, backup_under: Path | None = None) -> tuple[Path, list[str]]:
     backup_dir = backup_target(target_dir, backup_under)
     log_lines = []
@@ -206,6 +382,7 @@ class SaveTransferApp:
         self.pc_var = tk.StringVar()
         self.switch_var = tk.StringVar()
         self.direction_var = tk.StringVar(value="to_switch")
+        self.dbi_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._load_saved_paths()
@@ -230,9 +407,10 @@ class SaveTransferApp:
         ttk.Button(main, text="浏览…", command=self.browse_pc).grid(row=0, column=3)
 
         ttk.Label(main, text="Switch 目录", width=18).grid(row=1, column=0, sticky="w", pady=6)
-        switch_entry = ttk.Entry(main, textvariable=self.switch_var)
-        switch_entry.grid(row=1, column=1, sticky="ew", pady=6)
-        ttk.Button(main, text="浏览…", command=self.browse_switch).grid(row=1, column=2, columnspan=2, padx=6)
+        self.switch_entry = ttk.Entry(main, textvariable=self.switch_var)
+        self.switch_entry.grid(row=1, column=1, sticky="ew", pady=6)
+        self.switch_browse_button = ttk.Button(main, text="浏览…", command=self.browse_switch)
+        self.switch_browse_button.grid(row=1, column=2, columnspan=2, padx=6)
 
         direction = ttk.Frame(main)
         direction.grid(row=2, column=0, columnspan=4, sticky="w", pady=10)
@@ -250,6 +428,12 @@ class SaveTransferApp:
             value="to_pc",
             command=self.clear_preview,
         ).pack(side="left")
+        ttk.Checkbutton(
+            direction,
+            text="直连 DBI/MTP Switch",
+            variable=self.dbi_var,
+            command=self._on_dbi_toggle,
+        ).pack(side="right")
 
         actions = ttk.Frame(main)
         actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(4, 10))
@@ -300,6 +484,7 @@ class SaveTransferApp:
             self.log("未找到现成 PC 存档，可手动点击“浏览…”选择。")
         self.pc_var.set(pc_dir)
         self.switch_var.set(switch_dir)
+        self._on_dbi_toggle()
 
     def detect_pc(self) -> None:
         detected = find_pc_save_dir()
@@ -326,6 +511,16 @@ class SaveTransferApp:
             self.log(f"Switch 备份目录：{chosen}")
             self.clear_preview()
 
+    def _on_dbi_toggle(self) -> None:
+        if self.dbi_var.get():
+            self.switch_entry.configure(state="disabled")
+            self.switch_browse_button.configure(state="disabled")
+            self.log("已启用 DBI/MTP 直连模式：转换时会自动检测 Switch 存档。")
+        else:
+            self.switch_entry.configure(state="normal")
+            self.switch_browse_button.configure(state="normal")
+        self.clear_preview()
+
     def log(self, message: str) -> None:
         self.log_text.configure(state="normal")
         self.log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {message}\n")
@@ -350,6 +545,9 @@ class SaveTransferApp:
 
     def preview(self) -> None:
         self.clear_preview()
+        if self.dbi_var.get():
+            self._dbi_preview()
+            return
         try:
             items, _ = self._current_plan()
         except Exception as exc:
@@ -366,6 +564,9 @@ class SaveTransferApp:
         self.log(f"预览完成：将处理 {len(items)} 个存档文件。")
 
     def convert(self) -> None:
+        if self.dbi_var.get():
+            self._convert_dbi()
+            return
         try:
             items, target = self._current_plan()
         except Exception as exc:
@@ -396,6 +597,125 @@ class SaveTransferApp:
         except Exception as exc:
             self.log(f"转换失败：{exc}")
             messagebox.showerror("转换失败", str(exc))
+
+    def _pc_save_dir(self) -> Path:
+        pc_text = self.pc_var.get().strip()
+        if not pc_text:
+            raise ValueError("PC 存档目录为空，请先点击“自动检测”或“浏览…”。")
+        pc_dir = Path(pc_text)
+        if not pc_dir.is_dir():
+            raise ValueError(f"PC 存档目录不存在：{pc_dir}")
+        return pc_dir
+
+    def _resolve_dbi_profile(self) -> str:
+        profiles = dbi_profiles()
+        if not profiles:
+            raise ValueError("DBI 存档目录中没有找到《潜水员戴夫》的 GameSave 存档。")
+        if len(profiles) > 1:
+            self.log(f"检测到多个用户存档目录，将使用第一个：{profiles[0]}")
+        profile = profiles[0]
+        self.log(f"已连接 Switch DBI 存档：DAVE THE DIVER / {profile}")
+        return profile
+
+    def _dbi_preview(self) -> None:
+        try:
+            profile = self._resolve_dbi_profile()
+            pc_dir = self._pc_save_dir()
+            if self.direction_var.get() == "to_switch":
+                sources = sorted(
+                    (path for path in pc_dir.iterdir() if _is_pc_save_file(path)),
+                    key=lambda path: path.name,
+                )
+                if not sources:
+                    raise ValueError(f"PC 存档目录里没有可转换的 .sav 文件：{pc_dir}")
+                for source in sources:
+                    self.tree.insert(
+                        "",
+                        "end",
+                        values=(source.name, source.stem, "写入 Switch DBI"),
+                    )
+                self.summary_var.set(f"DBI {profile}：将写入 {len(sources)} 个文件")
+            else:
+                files = dbi_list_files(profile)
+                if not files:
+                    raise ValueError("Switch DBI 存档目录中没有文件。")
+                for name in files:
+                    target = name if name.lower().endswith(".sav") else name + ".sav"
+                    self.tree.insert(
+                        "",
+                        "end",
+                        values=(name, target, "写入 PC"),
+                    )
+                self.summary_var.set(f"DBI {profile}：将读取 {len(files)} 个文件")
+            self.log(f"DBI/MTP 预览完成：{profile}")
+        except Exception as exc:
+            self.log(f"DBI 预览失败：{exc}")
+            messagebox.showerror("DBI 预览失败", str(exc))
+
+    def _convert_dbi(self) -> None:
+        try:
+            profile = self._resolve_dbi_profile()
+            pc_dir = self._pc_save_dir()
+        except Exception as exc:
+            self.log(f"DBI 转换失败：{exc}")
+            messagebox.showerror("DBI 转换失败", str(exc))
+            return
+
+        direction_text = "PC → Switch" if self.direction_var.get() == "to_switch" else "Switch → PC"
+        if not messagebox.askyesno(
+            "确认 DBI 转换",
+            f"方向：{direction_text}\n"
+            f"Switch 用户目录：DAVE THE DIVER / {profile}\n\n"
+            "PC → Switch 会先自动备份当前 Switch 存档，再写入并校验。\n"
+            "Switch → PC 会先导出 Switch 存档，再覆盖 PC 存档并自动备份 PC 原存档。\n\n"
+            "是否继续？",
+        ):
+            return
+
+        stamp = time.strftime("%Y%m%d_%H%M%S") + "_" + str(int(time.time() * 1000) % 1000)
+        work_root = app_local_dir() / "dbi_work"
+        work_root.mkdir(parents=True, exist_ok=True)
+        try:
+            if self.direction_var.get() == "to_switch":
+                staging = work_root / f"pc_to_switch_{stamp}"
+                staging.mkdir(parents=True, exist_ok=True)
+                items = plan_pc_to_switch(pc_dir, staging)
+                for item in items:
+                    item.target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item.source, item.target)
+                self.log(f"已生成 Switch 格式文件：{staging}")
+
+                backup_dir = backup_root() / f"DBI_Switch_{stamp}"
+                self.log("正在导出当前 Switch 存档作为备份…")
+                dbi_export_to(profile, backup_dir)
+                self.log(f"Switch 原存档备份完成：{backup_dir}")
+
+                self.log(f"正在写入并校验 {len(items)} 个文件到 Switch…")
+                dbi_upload_and_verify(profile, staging)
+                self.summary_var.set(f"DBI 完成：{len(items)} 个文件")
+                self.log("DBI/MTP 写入校验通过。")
+                messagebox.showinfo(
+                    "DBI 转换完成",
+                    f"PC 存档已写入 Switch 并校验通过。\n\n备份位于：\n{backup_dir}",
+                )
+            else:
+                source_dir = work_root / f"switch_to_pc_{stamp}"
+                self.log("正在从 Switch 导出存档…")
+                dbi_export_to(profile, source_dir)
+                items = plan_switch_to_pc(source_dir, pc_dir)
+                self.log(f"正在转换并写入 PC：{pc_dir}")
+                backup_dir, log_lines = execute_plan(items, pc_dir)
+                for line in log_lines:
+                    self.log(line)
+                self.summary_var.set(f"DBI 完成：{len(items)} 个文件")
+                self.log(f"PC 原存档备份：{backup_dir}")
+                messagebox.showinfo(
+                    "DBI 转换完成",
+                    f"Switch 存档已写入 PC 并校验完成。\n\nPC 原存档备份位于：\n{backup_dir}",
+                )
+        except Exception as exc:
+            self.log(f"DBI 转换失败：{exc}")
+            messagebox.showerror("DBI 转换失败", str(exc))
 
     def on_close(self) -> None:
         save_config(self.pc_var.get().strip(), self.switch_var.get().strip())

@@ -14,6 +14,19 @@
 
 每次转换前工具都会把目标目录自动备份到 `%LOCALAPPDATA%\DaveDiverSaveTransfer\backups\`。
 
+## DBI/MTP 直连模式
+
+如果 Switch 已经通过 DBI 的 MTP Responder 连接电脑，可以不用手动复制存档目录：
+
+1. 在 DBI 中开启 `Run MTP responder`，让电脑里出现 `此电脑 > Switch`。
+2. 打开工具后勾选“直连 DBI/MTP Switch”。
+3. PC 存档目录保持自动检测，选择方向后点击“预览”和“开始转换”。
+4. PC → Switch 会自动导出并备份当前 Switch 存档、写入 PC 存档并校验文件。
+5. Switch → PC 会自动导出 Switch 存档、补上 `.sav` 后覆盖 PC 存档。
+
+直连模式会把 Switch 原存档备份到
+`%LOCALAPPDATA%\DaveDiverSaveTransfer\backups\`。
+
 ## 重新构建 exe
 
 在 Windows 下双击 `build.bat`，产物输出到 `dist\DaveDiverSaveTransfer.exe`。
