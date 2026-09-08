@@ -19,6 +19,20 @@ const GLuint SCREEN_WIDTH = 1280, SCREEN_HEIGHT = 720;
 SDL_Window *g_window = NULL;
 SDL_GLContext g_context;
 
+enum Language {
+    Lang_English,
+    Lang_Chinese,
+};
+
+static Language g_language = Lang_English;
+static ImFont *g_font_standard = NULL;
+static ImFont *g_font_chinese = NULL;
+
+static const char *T(const char *english, const char *chinese)
+{
+    return g_language == Lang_Chinese ? chinese : english;
+}
+
 enum ScreenId {
     Screen_Overview,
     Screen_Games,
@@ -114,20 +128,59 @@ static bool initSdl()
 
 static void loadSystemFont(ImGuiIO &io)
 {
-    io.Fonts->AddFontDefault();
     if (R_SUCCEEDED(plInitialize(PlServiceType_System))) {
-        PlFontData std_font, ext_font;
-        if (R_SUCCEEDED(plGetSharedFontByType(&std_font, PlSharedFontType_Standard)) &&
-            R_SUCCEEDED(plGetSharedFontByType(&ext_font, PlSharedFontType_NintendoExt))) {
-            ImFontConfig config;
-            config.FontDataOwnedByAtlas = false;
+        PlFontData std_font;
+        PlFontData chinese_font;
+        ImFontConfig config;
+        config.FontDataOwnedByAtlas = false;
+
+        if (R_SUCCEEDED(plGetSharedFontByType(&std_font, PlSharedFontType_Standard))) {
             strncpy(config.Name, "Nintendo Standard", sizeof(config.Name) - 1);
-            io.Fonts->AddFontFromMemoryTTF(std_font.address, std_font.size, 24.0f, &config,
-                                           io.Fonts->GetGlyphRangesCyrillic());
+            g_font_standard = io.Fonts->AddFontFromMemoryTTF(
+                std_font.address, std_font.size, 24.0f, &config,
+                io.Fonts->GetGlyphRangesCyrillic());
+        }
+        if (R_SUCCEEDED(plGetSharedFontByType(&chinese_font, PlSharedFontType_ChineseSimplified))) {
+            strncpy(config.Name, "Chinese Simplified", sizeof(config.Name) - 1);
+            g_font_chinese = io.Fonts->AddFontFromMemoryTTF(
+                chinese_font.address, chinese_font.size, 24.0f, &config,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
         }
         plExit();
     }
     io.Fonts->Build();
+}
+
+static bool g_touch_down = false;
+
+static void updateImGuiInput(ImGuiIO &io, const PadState &pad)
+{
+    u64 buttons = padGetButtons(&pad);
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    io.NavInputs[ImGuiNavInput_Activate] = (buttons & HidNpadButton_A) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_Cancel] = (buttons & HidNpadButton_B) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_Input] = (buttons & HidNpadButton_X) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_Menu] = (buttons & HidNpadButton_Y) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_DpadUp] = (buttons & HidNpadButton_AnyUp) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_DpadDown] = (buttons & HidNpadButton_AnyDown) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_DpadLeft] = (buttons & HidNpadButton_AnyLeft) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_DpadRight] = (buttons & HidNpadButton_AnyRight) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_FocusPrev] = (buttons & HidNpadButton_L) ? 1.0f : 0.0f;
+    io.NavInputs[ImGuiNavInput_FocusNext] = (buttons & HidNpadButton_R) ? 1.0f : 0.0f;
+
+    HidTouchScreenState touch_state;
+    memset(&touch_state, 0, sizeof(touch_state));
+    hidGetTouchScreenStates(&touch_state, 1);
+    if (touch_state.count > 0) {
+        float x = (float)touch_state.touches[0].x;
+        float y = (float)touch_state.touches[0].y;
+        io.MousePos = ImVec2(x, y);
+        io.MouseDown[0] = true;
+        g_touch_down = true;
+    } else {
+        io.MouseDown[0] = false;
+        g_touch_down = false;
+    }
 }
 
 static void drawHeader()
@@ -136,7 +189,12 @@ static void drawHeader()
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.13f, 0.24f, 0.38f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.18f, 0.30f, 1.0f));
 
-    static const char *names[] = {"Overview", "Games", "System", "Settings"};
+    static const char *names[] = {
+        T("Overview", "概览"),
+        T("Games", "游戏"),
+        T("System", "系统"),
+        T("Settings", "设置"),
+    };
     for (int i = 0; i < Screen_Count; i++) {
         if (i > 0) ImGui::SameLine();
         if (ImGui::Button(names[i], ImVec2(180, 42))) {
@@ -147,7 +205,9 @@ static void drawHeader()
     ImGui::SameLine();
     ImGui::Text("|");
     ImGui::SameLine();
-    const char *server_status = g_info_server.running() ? "Info server: ON" : "Info server: OFF";
+    const char *server_status = g_info_server.running()
+        ? T("Info server: ON", "信息服务器：开")
+        : T("Info server: OFF", "信息服务器：关");
     ImGui::TextUnformatted(server_status);
 
     ImGui::PopStyleColor(3);
@@ -157,22 +217,27 @@ static void drawOverview()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
     ImGui::BeginChild("overview", ImVec2(0, 0), true);
-    ImGui::TextWrapped("Connect this homebrew to the PC Hub by WiFi. "
-                       "The PC app can discover installed games, save sizes and system information.");
+    ImGui::TextWrapped(T(
+        "Connect this homebrew to the PC Hub by WiFi. "
+        "The PC app can discover installed games, save sizes and system information.",
+        "通过 WiFi 连接 PC Hub。PC 端可以自动发现游戏、存档大小和系统信息。"));
     ImGui::Spacing();
-    ImGui::Text("Users: %d", (int)g_users.size());
-    ImGui::Text("Installed saves: %d", (int)g_titles.size());
-    ImGui::Text("Firmware: %s", g_system.firmware[0] ? g_system.firmware : "unknown");
-    ImGui::Text("Hardware: %s", g_system.hardware[0] ? g_system.hardware : "unknown");
-    ImGui::Text("CFW: %s", g_system.atmosphere[0] ? g_system.atmosphere : "unknown");
+    ImGui::Text(T("Users: %d", "用户：%d"), (int)g_users.size());
+    ImGui::Text(T("Installed saves: %d", "已安装存档：%d"), (int)g_titles.size());
+    ImGui::Text(T("Firmware: %s", "固件：%s"),
+                g_system.firmware[0] ? g_system.firmware : T("unknown", "未知"));
+    ImGui::Text(T("Hardware: %s", "硬件：%s"),
+                g_system.hardware[0] ? g_system.hardware : T("unknown", "未知"));
+    ImGui::Text(T("CFW: %s", "自制系统：%s"),
+                g_system.atmosphere[0] ? g_system.atmosphere : T("unknown", "未知"));
     ImGui::Spacing();
-    if (ImGui::Button("Scan installed games", ImVec2(260, 48))) {
+    if (ImGui::Button(T("Scan installed games", "扫描已安装游戏"), ImVec2(300, 48))) {
         g_app.scan_requested = true;
         refreshData();
         g_app.screen = Screen_Games;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Start WiFi info server", ImVec2(280, 48))) {
+    if (ImGui::Button(T("Start WiFi info server", "启动 WiFi 信息服务器"), ImVec2(340, 48))) {
         if (g_info_server.running()) {
             g_info_server.stop();
             g_app.server_running = false;
@@ -180,10 +245,12 @@ static void drawOverview()
             g_app.server_running = g_info_server.start(buildCatalogJson());
             if (g_app.server_running) {
                 snprintf(g_app.status, sizeof(g_app.status),
-                         "Info server listening on port 8080. Open PC Hub and press WiFi scan.");
+                         T("Info server listening on port 8080. Open PC Hub and press WiFi scan.",
+                           "信息服务器已在 8080 端口监听，请在 PC Hub 中点击 WiFi 自动扫描。"));
             } else {
                 snprintf(g_app.status, sizeof(g_app.status),
-                         "Failed to start info server. Check network or port 8080.");
+                         T("Failed to start info server. Check network or port 8080.",
+                           "信息服务器启动失败，请检查网络或 8080 端口。"));
             }
         }
     }
@@ -197,7 +264,9 @@ static void drawGames()
 {
     ImGui::BeginChild("games", ImVec2(0, 0), true);
     if (g_titles.empty()) {
-        ImGui::TextWrapped("No save data found. Run games once so they create saves, then rescan.");
+        ImGui::TextWrapped(T(
+            "No save data found. Run games once so they create saves, then rescan.",
+            "没有找到存档。请先运行一次游戏生成存档，然后重新扫描。"));
     }
     for (size_t i = 0; i < g_titles.size(); i++) {
         char label[1400];
@@ -211,55 +280,60 @@ static void drawGames()
     ImGui::Separator();
     if (g_app.selected_game >= 0 && g_app.selected_game < (int)g_titles.size()) {
         AppTitle &title = g_titles[g_app.selected_game];
-        ImGui::Text("Selected: %s | %s", title.name, title.title_id);
+        ImGui::Text(T("Selected: %s | %s", "已选择：%s | %s"), title.name, title.title_id);
         if (!g_info_server.running() && !g_transfer_server.active()) {
-            if (ImGui::Button("Export selected to PC", ImVec2(300, 42))) {
+            if (ImGui::Button(T("Export selected to PC", "发送所选存档到 PC"), ImVec2(360, 42))) {
                 std::string error;
                 if (exportTitleToZip(g_users[0], title, error)) {
                     if (g_transfer_server.start("sdmc:/temp.zip")) {
                         snprintf(g_transfer_status, sizeof(g_transfer_status),
-                                 "Waiting for PC to download %s...", title.name);
+                                 T("Waiting for PC to download %s...",
+                                   "等待 PC 下载 %s..."), title.name);
                     } else {
                         snprintf(g_transfer_status, sizeof(g_transfer_status),
-                                 "Failed to start transfer server");
+                                 T("Failed to start transfer server",
+                                   "传输服务器启动失败"));
                     }
                 } else {
                     snprintf(g_transfer_status, sizeof(g_transfer_status),
-                             "Export failed: %s", error.c_str());
+                             T("Export failed: %s", "导出失败：%s"), error.c_str());
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("Receive from PC", ImVec2(300, 42))) {
+            if (ImGui::Button(T("Receive from PC", "从 PC 接收"), ImVec2(300, 42))) {
                 std::string error;
                 if (downloadZipFromPc(g_pc_ip, error)) {
                     if (restoreTitleFromZip(g_users[0], title, error)) {
                         snprintf(g_transfer_status, sizeof(g_transfer_status),
-                                 "Restored %s from PC", title.name);
+                                 T("Restored %s from PC", "已从 PC 恢复 %s"), title.name);
                     } else {
                         snprintf(g_transfer_status, sizeof(g_transfer_status),
-                                 "Restore failed: %s", error.c_str());
+                                 T("Restore failed: %s", "恢复失败：%s"), error.c_str());
                     }
                 } else {
                     snprintf(g_transfer_status, sizeof(g_transfer_status),
-                             "Download failed: %s", error.c_str());
+                             T("Download failed: %s", "下载失败：%s"), error.c_str());
                 }
             }
         }
     }
     ImGui::Spacing();
-    ImGui::TextWrapped("Status: %s", g_transfer_status);
+    ImGui::TextWrapped(T("Status: %s", "状态：%s"), g_transfer_status);
     ImGui::EndChild();
 }
 
 static void drawSystem()
 {
     ImGui::BeginChild("system", ImVec2(0, 0), true);
-    ImGui::TextWrapped("Firmware: %s", g_system.firmware[0] ? g_system.firmware : "unknown");
-    ImGui::TextWrapped("Hardware: %s", g_system.hardware[0] ? g_system.hardware : "unknown");
-    ImGui::TextWrapped("CFW: %s", g_system.atmosphere[0] ? g_system.atmosphere : "unknown");
+    ImGui::TextWrapped(T("Firmware: %s", "固件：%s"),
+                       g_system.firmware[0] ? g_system.firmware : T("unknown", "未知"));
+    ImGui::TextWrapped(T("Hardware: %s", "硬件：%s"),
+                       g_system.hardware[0] ? g_system.hardware : T("unknown", "未知"));
+    ImGui::TextWrapped(T("CFW: %s", "自制系统：%s"),
+                       g_system.atmosphere[0] ? g_system.atmosphere : T("unknown", "未知"));
     ImGui::Separator();
     for (size_t i = 0; i < g_users.size(); i++) {
-        ImGui::Text("User %d: %s", (int)i + 1, g_users[i].nickname);
+        ImGui::Text(T("User %d: %s", "用户 %d：%s"), (int)i + 1, g_users[i].nickname);
     }
     ImGui::EndChild();
 }
@@ -267,14 +341,22 @@ static void drawSystem()
 static void drawSettings()
 {
     ImGui::BeginChild("settings", ImVec2(0, 0), true);
-    ImGui::InputText("PC IP", g_pc_ip, sizeof(g_pc_ip));
-    ImGui::TextWrapped("Use this IP on the PC Hub when syncing PC to Switch.");
+    ImGui::TextWrapped(T("Language", "语言"));
+    if (ImGui::Button(g_language == Lang_English ? T("Chinese", "English") : T("English", "中文"),
+                      ImVec2(200, 42))) {
+        g_language = g_language == Lang_English ? Lang_Chinese : Lang_English;
+    }
+    ImGui::Spacing();
+    ImGui::InputText(T("PC IP", "PC IP"), g_pc_ip, sizeof(g_pc_ip));
+    ImGui::TextWrapped(T(
+        "Use this IP on the PC Hub when syncing PC to Switch.",
+        "PC Hub 向 Switch 发送存档时使用此 IP。"));
     ImGui::EndChild();
 }
 
 static void drawFrame()
 {
-    ImGui::Begin("Switch Save Sync Hub", NULL,
+    ImGui::Begin(T("Switch Save Sync Hub", "Switch 存档同步中心"), NULL,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -326,6 +408,9 @@ int main()
         }
         padUpdate(&pad);
         if (padGetButtonsDown(&pad) & HidNpadButton_Plus) exit_app = true;
+        io.FontDefault = (g_language == Lang_Chinese && g_font_chinese)
+            ? g_font_chinese : g_font_standard;
+        updateImGuiInput(io, pad);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame(g_window);
