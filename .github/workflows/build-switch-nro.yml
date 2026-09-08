@@ -36,15 +36,32 @@ jobs:
           name: NX-Save-Sync-Hub-NRO
           path: built-nro
 
-      - name: Publish NRO release
+      - name: Publish NRO release via API
         if: github.event_name == 'push'
-        run: |
-          gh release create "nro-${{ github.run_number }}" \
-            --title "Switch NRO build ${{ github.run_number }}" \
-            --prerelease \
-            built-nro/SwitchSaveSyncHub.nro
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'built-nro/SwitchSaveSyncHub.nro';
+            const content = fs.readFileSync(path);
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `nro-${context.runNumber}`,
+              name: `Switch NRO build ${context.runNumber}`,
+              prerelease: true,
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: 'SwitchSaveSyncHub.nro',
+              data: content,
+              headers: {
+                'content-type': 'application/octet-stream',
+                'content-length': content.length,
+              },
+            });
 
       - name: Open CI failure issue
         if: failure()
