@@ -12,6 +12,7 @@
 #include "imgui/imgui_impl_opengl3.h"
 #include "discovery.h"
 #include "info_server.h"
+#include "transfer.h"
 
 const GLuint SCREEN_WIDTH = 1280, SCREEN_HEIGHT = 720;
 
@@ -39,6 +40,9 @@ std::vector<AppUser> g_users;
 std::vector<AppTitle> g_titles;
 SystemSnapshot g_system;
 static InfoServer g_info_server;
+static TransferServer g_transfer_server;
+static char g_pc_ip[64] = "192.168.1.100";
+static char g_transfer_status[512] = "No transfer running";
 
 static void refreshData()
 {
@@ -181,6 +185,46 @@ static void drawGames()
             g_app.selected_game = (int)i;
         }
     }
+    ImGui::Separator();
+    if (g_app.selected_game >= 0 && g_app.selected_game < (int)g_titles.size()) {
+        AppTitle &title = g_titles[g_app.selected_game];
+        ImGui::Text("Selected: %s | %s", title.name, title.title_id);
+        if (!g_info_server.running() && !g_transfer_server.active()) {
+            if (ImGui::Button("Export selected to PC", ImVec2(300, 42))) {
+                std::string error;
+                if (exportTitleToZip(g_users[0], title, error)) {
+                    if (g_transfer_server.start("sdmc:/temp.zip")) {
+                        snprintf(g_transfer_status, sizeof(g_transfer_status),
+                                 "Waiting for PC to download %s...", title.name);
+                    } else {
+                        snprintf(g_transfer_status, sizeof(g_transfer_status),
+                                 "Failed to start transfer server");
+                    }
+                } else {
+                    snprintf(g_transfer_status, sizeof(g_transfer_status),
+                             "Export failed: %s", error.c_str());
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Receive from PC", ImVec2(300, 42))) {
+                std::string error;
+                if (downloadZipFromPc(g_pc_ip, error)) {
+                    if (restoreTitleFromZip(g_users[0], title, error)) {
+                        snprintf(g_transfer_status, sizeof(g_transfer_status),
+                                 "Restored %s from PC", title.name);
+                    } else {
+                        snprintf(g_transfer_status, sizeof(g_transfer_status),
+                                 "Restore failed: %s", error.c_str());
+                    }
+                } else {
+                    snprintf(g_transfer_status, sizeof(g_transfer_status),
+                             "Download failed: %s", error.c_str());
+                }
+            }
+        }
+    }
+    ImGui::Spacing();
+    ImGui::TextWrapped("Status: %s", g_transfer_status);
     ImGui::EndChild();
 }
 
@@ -200,7 +244,8 @@ static void drawSystem()
 static void drawSettings()
 {
     ImGui::BeginChild("settings", ImVec2(0, 0), true);
-    ImGui::TextUnformatted("Transfer settings backend is being wired up.");
+    ImGui::InputText("PC IP", g_pc_ip, sizeof(g_pc_ip));
+    ImGui::TextWrapped("Use this IP on the PC Hub when syncing PC to Switch.");
     ImGui::EndChild();
 }
 
@@ -245,6 +290,11 @@ int main()
     PadState pad;
     padInitializeDefault(&pad);
     while (!exit_app && appletMainLoop()) {
+        if (g_transfer_server.active() && g_transfer_server.done()) {
+            g_transfer_server.stop();
+            snprintf(g_transfer_status, sizeof(g_transfer_status),
+                     "Export completed by PC");
+        }
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
@@ -274,6 +324,7 @@ int main()
     SDL_GL_DeleteContext(g_context);
     SDL_DestroyWindow(g_window);
     g_info_server.stop();
+    g_transfer_server.stop();
     SDL_Quit();
     return 0;
 }
