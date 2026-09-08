@@ -1,5 +1,6 @@
 #include "discovery.h"
 
+#include <cstdlib>
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
@@ -60,7 +61,7 @@ static void titleName(u64 app_id, char *out, size_t out_size)
     }
 
     NacpLanguageEntry *entry = NULL;
-    if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &entry)) && entry && entry->name) {
+    if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &entry)) && entry) {
         strncpy(out, entry->name, out_size - 1);
         out[out_size - 1] = 0;
     }
