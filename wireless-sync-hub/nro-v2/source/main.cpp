@@ -55,6 +55,29 @@ static void refreshData()
     }
 }
 
+static void loadPcIpFromSd()
+{
+    FILE *file = fopen("sdmc:/switch/SwitchSaveSyncHub/config.json", "r");
+    if (!file) return;
+    char text[256] = {0};
+    size_t n = fread(text, 1, sizeof(text) - 1, file);
+    fclose(file);
+    text[n] = 0;
+    const char *marker = strstr(text, "\"pc\":\"");
+    if (!marker) return;
+    marker += 6;
+    char ip[64] = {0};
+    size_t i = 0;
+    while (marker[i] && marker[i] != '"' && i < sizeof(ip) - 1) {
+        ip[i] = marker[i];
+        i++;
+    }
+    ip[i] = 0;
+    if (ip[0]) {
+        snprintf(g_pc_ip, sizeof(g_pc_ip), "%s", ip);
+    }
+}
+
 static bool initSdl()
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
@@ -280,6 +303,7 @@ int main()
     ImGui::StyleColorsDark();
     loadSystemFont(io);
 
+    loadPcIpFromSd();
     refreshData();
 
     ImGui_ImplSDL2_InitForOpenGL(g_window, g_context);

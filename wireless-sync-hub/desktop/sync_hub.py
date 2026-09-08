@@ -14,6 +14,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -39,6 +41,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from discovery import dbi_installed_games, wifi_catalog
 
 
 APP_NAME = "SwitchSaveSyncHub"
@@ -306,6 +310,8 @@ class SyncWorker(QThread):
 
     def run(self) -> None:
         try:
+            if not self.game.get("title_id", "").strip():
+                raise RuntimeError("Title ID 为空，请先通过 WiFi 自动扫描补全。")
             if self.direction == "from_switch":
                 self._run_from_switch()
             else:
@@ -321,7 +327,7 @@ class SyncWorker(QThread):
         if not pc_dir.is_dir():
             raise RuntimeError(f"PC 存档目录不存在：{pc_dir}")
 
-        self.log.emit("正在从 Switch 下载存档，请在 Switch 的 NX-Save-Sync 中进入 Send 并启动服务器。")
+        self.log.emit("正在从 Switch 下载存档，请在 Switch 新版 Hub NRO 中选择游戏并点 Export selected to PC。")
         with tempfile.TemporaryDirectory(prefix="sync_from_switch_") as tmp:
             root = Path(tmp)
             dest_zip = root / "temp.zip"
@@ -349,7 +355,7 @@ class SyncWorker(QThread):
         if not host:
             raise RuntimeError("请先在顶部填写 Switch 的 IP 地址。")
         pc_ip = self.config.get("pc_ip") or lan_ip()
-        self.log.emit(f"请在 Switch 的 NX-Save-Sync 中进入 Receive，并确认 PC IP 为 {pc_ip}。")
+        self.log.emit(f"请在 Switch 新版 Hub NRO 中进入 Receive from PC，并确认 PC IP 为 {pc_ip}。")
         with tempfile.TemporaryDirectory(prefix="sync_to_switch_") as tmp:
             root = Path(tmp)
             zip_path = stage_pc_zip(self.game, root, self.log.emit)
@@ -434,8 +440,8 @@ class ProfileDialog(QDialog):
         name = self.name_edit.text().strip()
         tid = self.tid_edit.text().strip().upper()
         pc_dir = self.path_edit.text().strip()
-        if not name or not tid or not pc_dir:
-            QMessageBox.warning(self, "缺少信息", "游戏名称、Title ID 和 PC 目录都需要填写。")
+        if not name or not pc_dir:
+            QMessageBox.warning(self, "缺少信息", "游戏名称和 PC 目录需要填写。")
             return
         self._game.update(
             {
@@ -504,13 +510,23 @@ class MainWindow(QMainWindow):
         edit_button.clicked.connect(self._edit_game)
         remove_button = QPushButton("删除")
         remove_button.clicked.connect(self._remove_game)
+        button_row.addWidget(edit_button)
+        button_row.addWidget(remove_button)
+        button_row.addStretch(1)
+        left_layout.addLayout(button_row)
+
+        sync_row = QHBoxLayout()
+        usb_button = QPushButton("USB 自动扫描 (DBI)")
+        usb_button.clicked.connect(self._usb_scan)
+        wifi_button = QPushButton("WiFi 自动扫描 (NRO)")
+        wifi_button.clicked.connect(self._wifi_scan)
         self.from_switch_button = QPushButton("同步：Switch → PC")
         self.from_switch_button.clicked.connect(lambda: self._sync("from_switch"))
         self.to_switch_button = QPushButton("同步：PC → Switch")
         self.to_switch_button.clicked.connect(lambda: self._sync("to_switch"))
-        for button in (add_button, edit_button, remove_button, self.from_switch_button, self.to_switch_button):
-            button_row.addWidget(button)
-        left_layout.addLayout(button_row)
+        for button in (usb_button, wifi_button, self.from_switch_button, self.to_switch_button):
+            sync_row.addWidget(button)
+        left_layout.addLayout(sync_row)
         splitter.addWidget(left)
 
         right = QGroupBox("运行日志")
@@ -584,6 +600,138 @@ class MainWindow(QMainWindow):
             self.config["games"].remove(game)
             save_config(self.config)
             self._refresh_table()
+
+    def _find_game(self, name: str, title_id: str = "") -> dict | None:
+        for game in self.config["games"]:
+            if title_id and game.get("title_id", "").upper() == title_id.upper():
+                return game
+            if name and game.get("name", "") == name:
+                return game
+        return None
+
+    def _select_row_for_game(self, game: dict) -> None:
+        if game in self.config["games"]:
+            self.table.selectRow(self.config["games"].index(game))
+
+    def _usb_scan(self) -> None:
+        try:
+            games = dbi_installed_games()
+        except Exception as exc:
+            QMessageBox.critical(self, "USB 扫描失败", str(exc))
+            self.append_log(f"USB 扫描失败：{exc}")
+            return
+        if not games:
+            QMessageBox.information(self, "USB 扫描", "没有发现已安装游戏。")
+            return
+
+        labels = [game["name"] for game in games]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "USB 自动扫描",
+            "选择要从 Switch 添加的游戏：",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return
+        index = labels.index(choice)
+        found = games[index]
+        existing = self._find_game(found["name"])
+        if existing:
+            self._select_row_for_game(existing)
+            self.append_log(f"游戏已存在：{existing['name']}，已选中。")
+            return
+
+        new_game = {
+            "id": uuid.uuid4().hex,
+            "name": found["name"],
+            "title_id": "",
+            "pc_dir": "",
+            "mode": "sav",
+            "switch_user": found["users"][0] if found["users"] else "",
+            "history": [],
+            "last_sync": "",
+        }
+        dialog = ProfileDialog(self, new_game)
+        if dialog.exec() == QDialog.Accepted:
+            self.config["games"].append(dialog.game())
+            save_config(self.config)
+            self._refresh_table()
+            self.table.selectRow(len(self.config["games"]) - 1)
+            self.append_log("已从 USB 添加游戏；Title ID 可稍后用 WiFi 自动扫描补全。")
+
+    def _wifi_scan(self) -> None:
+        host = self.switch_ip_edit.text().strip()
+        if not host:
+            QMessageBox.warning(self, "缺少 Switch IP", "请先填写 Switch 的 IP 地址。")
+            return
+        try:
+            pc_ip = self.pc_ip_edit.text().strip() or lan_ip()
+            catalog = wifi_catalog(host, f"/?pc={quote(pc_ip)}")
+        except Exception as exc:
+            QMessageBox.critical(self, "WiFi 扫描失败", str(exc))
+            self.append_log(f"WiFi 扫描失败：{exc}")
+            return
+
+        titles = catalog.get("titles", [])
+        if not titles:
+            QMessageBox.information(self, "WiFi 扫描", "NRO 没有返回可同步的游戏存档。")
+            return
+        self.append_log(
+            f"WiFi 扫描成功：系统 {catalog.get('system', {}).get('firmware', '')}，"
+            f"发现 {len(titles)} 个游戏。"
+        )
+
+        for title in titles:
+            existing = self._find_game("", title.get("title_id", ""))
+            if existing and not existing.get("title_id"):
+                existing["title_id"] = title["title_id"].upper()
+            elif existing and not existing.get("name"):
+                existing["name"] = title.get("name", "")
+        save_config(self.config)
+        self._refresh_table()
+
+        labels = [f"{title.get('name', '')} | {title.get('title_id', '')}" for title in titles]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "WiFi 自动扫描",
+            "选择要从 NRO 添加/选中的游戏：",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return
+        index = labels.index(choice)
+        title = titles[index]
+        name = title.get("name", "")
+        tid = title.get("title_id", "").upper()
+        existing = self._find_game(name, tid)
+        if existing:
+            if not existing.get("title_id"):
+                existing["title_id"] = tid
+                save_config(self.config)
+                self._refresh_table()
+            self._select_row_for_game(existing)
+            self.append_log(f"已选中现有游戏：{name} | {tid}")
+            return
+
+        new_game = {
+            "id": uuid.uuid4().hex,
+            "name": name,
+            "title_id": tid,
+            "pc_dir": "",
+            "mode": "sav",
+            "history": [],
+            "last_sync": "",
+        }
+        dialog = ProfileDialog(self, new_game)
+        if dialog.exec() == QDialog.Accepted:
+            self.config["games"].append(dialog.game())
+            save_config(self.config)
+            self._refresh_table()
+            self.table.selectRow(len(self.config["games"]) - 1)
 
     def _sync(self, direction: str) -> None:
         if self.worker and self.worker.isRunning():

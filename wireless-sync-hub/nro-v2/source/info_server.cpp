@@ -16,6 +16,36 @@
 extern std::vector<AppUser> g_users;
 extern std::vector<AppTitle> g_titles;
 extern SystemSnapshot g_system;
+extern char g_pc_ip[64];
+
+static void savePcIp(const char *ip)
+{
+    mkdir("sdmc:/switch", 0777);
+    mkdir("sdmc:/switch/SwitchSaveSyncHub", 0777);
+    FILE *file = fopen("sdmc:/switch/SwitchSaveSyncHub/config.json", "w");
+    if (!file) return;
+    fprintf(file, "{\"pc\":\"%s\"}", ip);
+    fclose(file);
+}
+
+static void setPcIp(const char *query)
+{
+    const char *pc = strstr(query, "pc=");
+    if (!pc) return;
+    pc += 3;
+    char ip[64];
+    size_t n = 0;
+    while (pc[n] && pc[n] != '&' && pc[n] != ' ' && n < sizeof(ip) - 1) {
+        ip[n] = pc[n];
+        n++;
+    }
+    ip[n] = 0;
+    struct in_addr parsed;
+    if (inet_pton(AF_INET, ip, &parsed) == 1) {
+        strncpy(g_pc_ip, ip, sizeof(g_pc_ip) - 1);
+        savePcIp(g_pc_ip);
+    }
+}
 
 static std::string escapeJson(const char *text)
 {
@@ -128,6 +158,7 @@ void InfoServer::run()
         int received = recv(client, buffer, sizeof(buffer) - 1, 0);
         if (received > 0) {
             buffer[received] = 0;
+            setPcIp(buffer);
             std::string response = payload_;
             std::string header =
                 "HTTP/1.1 200 OK\r\n"
