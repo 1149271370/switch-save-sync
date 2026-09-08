@@ -42,6 +42,36 @@ static void logApp(const char *message)
     fclose(file);
 }
 
+static bool showAppletModeWarning()
+{
+    if (appletGetAppletType() != AppletType_LibraryApplet) {
+        return false;
+    }
+    logApp("applet mode detected; refusing to initialize GPU");
+    consoleInit(NULL);
+    printf("Do not launch from the Album applet.\n");
+    printf("This NRO needs GPU/homebrew title-override mode.\n\n");
+    printf("At the HOME menu:\n");
+    printf("1. Hold R\n");
+    printf("2. Open any installed game\n");
+    printf("3. Launch Switch Save Sync Hub from hbmenu\n\n");
+    printf("Press A to close.\n");
+    consoleUpdate(NULL);
+
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeDefault(&pad);
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & (HidNpadButton_A | HidNpadButton_B)) {
+            break;
+        }
+        consoleUpdate(NULL);
+    }
+    consoleExit(NULL);
+    return true;
+}
+
 enum ScreenId {
     Screen_Overview,
     Screen_Games,
@@ -386,14 +416,22 @@ static void drawFrame()
 int main()
 {
     logApp("start");
+    if (showAppletModeWarning()) {
+        logApp("closed after applet warning");
+        return 1;
+    }
     if (!initSdl()) return 1;
     logApp("sdl init ok");
 
     IMGUI_CHECKVERSION();
+    logApp("creating imgui context");
     ImGui::CreateContext();
+    logApp("imgui context ok");
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     ImGui::StyleColorsDark();
+    logApp("imgui style ok");
+    logApp("loading fonts");
     loadSystemFont(io);
     logApp("font load ok");
 
