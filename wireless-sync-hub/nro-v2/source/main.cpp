@@ -11,6 +11,7 @@
 #include "imgui/imgui_impl_sdl.h"
 #include "imgui/imgui_impl_opengl3.h"
 #include "discovery.h"
+#include "info_server.h"
 
 const GLuint SCREEN_WIDTH = 1280, SCREEN_HEIGHT = 720;
 
@@ -37,12 +38,16 @@ static AppState g_app;
 static std::vector<AppUser> g_users;
 static std::vector<AppTitle> g_titles;
 static SystemSnapshot g_system;
+static InfoServer g_info_server;
 
 static void refreshData()
 {
     scanSystem(g_system);
     if (R_SUCCEEDED(scanUsers(g_users)) && !g_users.empty()) {
         scanTitles(g_users[0].uid, g_titles);
+    }
+    if (g_info_server.running()) {
+        g_info_server.setPayload(buildCatalogJson());
     }
 }
 
@@ -115,7 +120,7 @@ static void drawHeader()
     ImGui::SameLine();
     ImGui::Text("|");
     ImGui::SameLine();
-    const char *server_status = g_app.server_running ? "Info server: ON" : "Info server: OFF";
+    const char *server_status = g_info_server.running() ? "Info server: ON" : "Info server: OFF";
     ImGui::TextUnformatted(server_status);
 
     ImGui::PopStyleColor(3);
@@ -141,7 +146,19 @@ static void drawOverview()
     }
     ImGui::SameLine();
     if (ImGui::Button("Start WiFi info server", ImVec2(280, 48))) {
-        g_app.server_running = !g_app.server_running;
+        if (g_info_server.running()) {
+            g_info_server.stop();
+            g_app.server_running = false;
+        } else {
+            g_app.server_running = g_info_server.start(buildCatalogJson());
+            if (g_app.server_running) {
+                snprintf(g_app.status, sizeof(g_app.status),
+                         "Info server listening on port 8080. Open PC Hub and press WiFi scan.");
+            } else {
+                snprintf(g_app.status, sizeof(g_app.status),
+                         "Failed to start info server. Check network or port 8080.");
+            }
+        }
     }
     ImGui::Spacing();
     ImGui::TextUnformatted(g_app.status);
@@ -256,6 +273,7 @@ int main()
     ImGui::DestroyContext();
     SDL_GL_DeleteContext(g_context);
     SDL_DestroyWindow(g_window);
+    g_info_server.stop();
     SDL_Quit();
     return 0;
 }
