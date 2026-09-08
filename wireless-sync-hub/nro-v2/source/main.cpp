@@ -35,9 +35,9 @@ struct AppState {
 };
 
 static AppState g_app;
-static std::vector<AppUser> g_users;
-static std::vector<AppTitle> g_titles;
-static SystemSnapshot g_system;
+std::vector<AppUser> g_users;
+std::vector<AppTitle> g_titles;
+SystemSnapshot g_system;
 static InfoServer g_info_server;
 
 static void refreshData()
