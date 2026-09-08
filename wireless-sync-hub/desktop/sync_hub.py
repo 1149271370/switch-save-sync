@@ -92,6 +92,13 @@ def lan_ip() -> str:
         return "0.0.0.0"
 
 
+def normalize_host(value: str) -> str:
+    value = value.strip()
+    if value.count(":") == 1 and value.rsplit(":", 1)[1].isdigit():
+        value = value.rsplit(":", 1)[0]
+    return value
+
+
 def backup_directory(source: Path) -> Path:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     dest = backup_root() / f"{source.name}_{stamp}"
@@ -320,7 +327,7 @@ class SyncWorker(QThread):
             self.failed.emit(str(exc))
 
     def _run_from_switch(self) -> None:
-        host = self.config.get("switch_ip", "").strip()
+        host = normalize_host(self.config.get("switch_ip", ""))
         if not host:
             raise RuntimeError("请先在顶部填写 Switch 的 IP 地址。")
         pc_dir = Path(self.game["pc_dir"])
@@ -351,7 +358,7 @@ class SyncWorker(QThread):
             self._record_success(f"Switch → PC：{copied} 个文件")
 
     def _run_to_switch(self) -> None:
-        host = self.config.get("switch_ip", "").strip()
+        host = normalize_host(self.config.get("switch_ip", ""))
         if not host:
             raise RuntimeError("请先在顶部填写 Switch 的 IP 地址。")
         pc_ip = self.config.get("pc_ip") or lan_ip()
@@ -543,7 +550,7 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(f"[{time.strftime('%H:%M:%S')}] {message}")
 
     def _save_ip(self) -> None:
-        self.config["switch_ip"] = self.switch_ip_edit.text().strip()
+        self.config["switch_ip"] = normalize_host(self.switch_ip_edit.text())
         self.config["pc_ip"] = self.pc_ip_edit.text().strip()
         save_config(self.config)
         self.append_log("IP 配置已保存。")
@@ -663,6 +670,7 @@ class MainWindow(QMainWindow):
 
     def _wifi_scan(self) -> None:
         host = self.switch_ip_edit.text().strip()
+        host = normalize_host(host)
         if not host:
             QMessageBox.warning(self, "缺少 Switch IP", "请先填写 Switch 的 IP 地址。")
             return

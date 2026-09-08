@@ -73,6 +73,8 @@ def wifi_catalog(host: str, path: str = "/") -> dict:
 
     import urllib.request
 
+    if host.count(":") == 1 and host.rsplit(":", 1)[1].isdigit():
+        host = host.rsplit(":", 1)[0]
     url = f"http://{host}:8080{path}"
     try:
         with urllib.request.urlopen(url, timeout=15) as response:

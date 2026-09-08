@@ -168,14 +168,35 @@ static bool initSdl()
 static void loadSystemFont(ImGuiIO &io)
 {
     g_font_standard = io.Fonts->AddFontDefault();
+    const char *font_paths[] = {
+        "sdmc:/switch/SwitchSaveSyncHub/font.ttf",
+        "sdmc:/switch/font.ttf",
+    };
+    for (size_t i = 0; i < sizeof(font_paths) / sizeof(font_paths[0]); i++) {
+        ImFont *font = io.Fonts->AddFontFromFileTTF(
+            font_paths[i], 24.0f, NULL,
+            io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+        if (font) {
+            g_font_chinese = font;
+            logApp("external Chinese font loaded");
+            break;
+        }
+    }
+    if (!g_font_chinese) {
+        logApp("no external Chinese font found; using default font");
+    }
     io.Fonts->Build();
 }
 
 static bool g_touch_down = false;
+static ImVec2 g_cursor = ImVec2(SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f);
+static bool g_pad_mouse_down = false;
 
 static void updateImGuiInput(ImGuiIO &io, const PadState &pad)
 {
     u64 buttons = padGetButtons(&pad);
+    u64 buttons_down = padGetButtonsDown(&pad);
+    u64 buttons_up = padGetButtonsUp(&pad);
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.NavInputs[ImGuiNavInput_Activate] = (buttons & HidNpadButton_A) ? 1.0f : 0.0f;
     io.NavInputs[ImGuiNavInput_Cancel] = (buttons & HidNpadButton_B) ? 1.0f : 0.0f;
@@ -187,6 +208,13 @@ static void updateImGuiInput(ImGuiIO &io, const PadState &pad)
     io.NavInputs[ImGuiNavInput_DpadRight] = (buttons & HidNpadButton_AnyRight) ? 1.0f : 0.0f;
     io.NavInputs[ImGuiNavInput_FocusPrev] = (buttons & HidNpadButton_L) ? 1.0f : 0.0f;
     io.NavInputs[ImGuiNavInput_FocusNext] = (buttons & HidNpadButton_R) ? 1.0f : 0.0f;
+    io.KeysDown[0] = (buttons & HidNpadButton_AnyUp) != 0;
+    io.KeysDown[1] = (buttons & HidNpadButton_AnyDown) != 0;
+    io.KeysDown[2] = (buttons & HidNpadButton_AnyLeft) != 0;
+    io.KeysDown[3] = (buttons & HidNpadButton_AnyRight) != 0;
+    io.KeysDown[4] = (buttons & HidNpadButton_A) != 0;
+    io.KeysDown[5] = (buttons & HidNpadButton_B) != 0;
+    io.KeysDown[6] = (buttons & HidNpadButton_R) != 0;
 
     HidTouchScreenState touch_state;
     memset(&touch_state, 0, sizeof(touch_state));
@@ -194,12 +222,37 @@ static void updateImGuiInput(ImGuiIO &io, const PadState &pad)
     if (touch_state.count > 0) {
         float x = (float)touch_state.touches[0].x;
         float y = (float)touch_state.touches[0].y;
+        g_cursor = ImVec2(x, y);
         io.MousePos = ImVec2(x, y);
         io.MouseDown[0] = true;
         g_touch_down = true;
     } else {
-        io.MouseDown[0] = false;
-        g_touch_down = false;
+        if (g_touch_down) {
+            io.MouseDown[0] = false;
+            g_touch_down = false;
+        }
+
+        float speed = 12.0f;
+        if (buttons & HidNpadButton_AnyLeft) g_cursor.x -= speed;
+        if (buttons & HidNpadButton_AnyRight) g_cursor.x += speed;
+        if (buttons & HidNpadButton_AnyUp) g_cursor.y -= speed;
+        if (buttons & HidNpadButton_AnyDown) g_cursor.y += speed;
+        if (g_cursor.x < 0.0f) g_cursor.x = 0.0f;
+        if (g_cursor.x > io.DisplaySize.x) g_cursor.x = io.DisplaySize.x;
+        if (g_cursor.y < 0.0f) g_cursor.y = 0.0f;
+        if (g_cursor.y > io.DisplaySize.y) g_cursor.y = io.DisplaySize.y;
+
+        if (buttons_down & HidNpadButton_A) {
+            g_pad_mouse_down = true;
+            io.MousePos = g_cursor;
+        }
+        if (buttons_up & HidNpadButton_A) {
+            io.MousePos = g_cursor;
+            io.MouseDown[0] = false;
+            g_pad_mouse_down = false;
+        }
+        io.MousePos = g_cursor;
+        io.MouseDown[0] = g_pad_mouse_down;
     }
 }
 
@@ -264,10 +317,12 @@ static void drawOverview()
         } else {
             g_app.server_running = g_info_server.start(buildCatalogJson());
             if (g_app.server_running) {
+                logApp("info server started");
                 snprintf(g_app.status, sizeof(g_app.status),
                          T("Info server listening on port 8080. Open PC Hub and press WiFi scan.",
                            "信息服务器已在 8080 端口监听，请在 PC Hub 中点击 WiFi 自动扫描。"));
             } else {
+                logApp("info server failed to start");
                 snprintf(g_app.status, sizeof(g_app.status),
                          T("Failed to start info server. Check network or port 8080.",
                            "信息服务器启动失败，请检查网络或 8080 端口。"));
@@ -391,6 +446,12 @@ static void drawFrame()
     else if (g_app.screen == Screen_System) drawSystem();
     else drawSettings();
 
+    if (!g_touch_down) {
+        ImDrawList *draw = ImGui::GetForegroundDrawList();
+        draw->AddCircleFilled(g_cursor, 16.0f, IM_COL32(255, 255, 255, 220));
+        draw->AddCircle(g_cursor, 16.0f, IM_COL32(20, 100, 220, 255), 32, 3.0f);
+    }
+
     ImGui::End();
 }
 
@@ -409,7 +470,14 @@ int main()
     ImGui::CreateContext();
     logApp("imgui context ok");
     ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+    io.KeyMap[ImGuiKey_UpArrow] = 0;
+    io.KeyMap[ImGuiKey_DownArrow] = 1;
+    io.KeyMap[ImGuiKey_LeftArrow] = 2;
+    io.KeyMap[ImGuiKey_RightArrow] = 3;
+    io.KeyMap[ImGuiKey_Enter] = 4;
+    io.KeyMap[ImGuiKey_Escape] = 5;
+    io.KeyMap[ImGuiKey_Tab] = 6;
     ImGui::StyleColorsDark();
     logApp("imgui style ok");
     logApp("loading fonts");
