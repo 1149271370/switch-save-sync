@@ -43,7 +43,7 @@ static void setPcIp(const char *query)
     ip[n] = 0;
     struct in_addr parsed;
     if (inet_pton(AF_INET, ip, &parsed) == 1) {
-        strncpy(g_pc_ip, ip, sizeof(g_pc_ip) - 1);
+        snprintf(g_pc_ip, sizeof(g_pc_ip), "%s", ip);
         savePcIp(g_pc_ip);
     }
 }

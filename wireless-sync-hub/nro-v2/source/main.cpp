@@ -41,7 +41,7 @@ std::vector<AppTitle> g_titles;
 SystemSnapshot g_system;
 static InfoServer g_info_server;
 static TransferServer g_transfer_server;
-static char g_pc_ip[64] = "192.168.1.100";
+char g_pc_ip[64] = "192.168.1.100";
 static char g_transfer_status[1024] = "No transfer running";
 
 static void refreshData()
